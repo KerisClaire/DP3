@@ -1,0 +1,135 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <ESP32QRCodeReader.h>
+#include <ezBuzzer.h>
+#include <Servo.h>
+
+#define WIFI_SSID "honey "
+#define WIFI_PASSWORD "christabel"
+#define WEBHOOK_URL "http://192.168.43.12"
+
+const int DOOR_RELAY_PIN = 15; // 16/2
+const int BUZZER_PIN = 12;
+const int LED_PIN = 13; //4 INTERNAL led
+const int SERVOMOTOR = 14;
+
+ESP32QRCodeReader reader(CAMERA_MODEL_AI_THINKER);
+struct QRCodeData qrCodeData;
+bool isConnected = false;
+
+ezBuzzer buzzer(BUZZER_PIN);
+Servo sg90;
+
+void openDoor()
+{
+  digitalWrite(DOOR_RELAY_PIN, LOW);
+}
+
+void closeDoor()
+{
+  digitalWrite(DOOR_RELAY_PIN, HIGH);
+}
+
+bool connectWifi()
+{
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    return true;
+  }
+
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  int maxRetries = 10;
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+    maxRetries--;
+    if (maxRetries <= 0)
+    {
+      return false;
+    }
+  }
+  Serial.println("");
+  Serial.println("WiFi connected");
+  return true;
+}
+
+void callWebhook(String code)
+{
+  HTTPClient http;
+  http.begin(String(WEBHOOK_URL) + "?code=" + code);
+
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK)
+  {
+    Serial.println("Open door");
+    openDoor();
+    delay(2000);
+    closeDoor();
+  }
+  else
+  {
+    Serial.println("Not authorized");
+    closeDoor();
+  }
+
+  http.end();
+}
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println();
+
+  pinMode(DOOR_RELAY_PIN, OUTPUT);
+  closeDoor();
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  sg90.attach(SERVOMOTOR);
+
+  reader.setup();
+  //reader.setDebug(true);
+  Serial.println("Setup QRCode Reader");
+
+  reader.begin();
+  Serial.println("Begin QR Code reader");
+
+  delay(1000);
+}
+
+void loop()
+{
+  buzzer.loop();
+  bool connected = connectWifi();
+  if (isConnected != connected)
+  {
+    isConnected = connected;
+  }
+  if (reader.receiveQrCode(&qrCodeData, 100))
+  {
+    Serial.println("Found QRCode");
+    if (qrCodeData.valid)
+    {
+      buzzer.beep(100);
+      sg90.write(0);
+      delay(2000);
+      sg90.write(180);
+      Serial.print("Payload: ");
+      Serial.println((const char *)qrCodeData.payload);
+      callWebhook(String((const char *)qrCodeData.payload));
+    }
+    else
+    {
+      Serial.print("Invalid: ");
+      Serial.println((const char *)qrCodeData.payload);
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+    }
+  }
+  delay(300);
+}
